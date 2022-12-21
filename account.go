@@ -4,12 +4,15 @@ import (
 	"encoding/json"
 	"time"
 
+	"golang.org/x/crypto/bcrypt"
+
 	"github.com/blbgo/record/root"
 )
 
 // Account represents an account in the database
 type Account interface {
 	ID() (uint32, error)
+	Email() (string, error)
 	Details(details *AccountDetails) error
 	Update(details *AccountDetails) error
 	Delete() error
@@ -25,13 +28,25 @@ type account struct {
 
 // AccountDetails is a collection of data about an account
 type AccountDetails struct {
-	AuthLevel  uint32
-	Created    time.Time
-	LastAccess time.Time
+	AuthLevel    uint32
+	PasswordHash []byte
+	Created      time.Time
+	LastAccess   time.Time
 }
 
 func (r account) ID() (uint32, error) {
 	return keyToID(r.Item.CopyKey(nil))
+}
+
+func (r account) Email() (string, error) {
+	if r.Item.IndexCount() != 1 {
+		return "", ErrInvalidIndexCount
+	}
+	buffer, err := r.Item.CopyIndex(0, nil)
+	if err != nil {
+		return "", err
+	}
+	return string(buffer), nil
 }
 
 func (r account) Details(details *AccountDetails) error {
@@ -86,4 +101,19 @@ func (r account) DeleteNamedValue(name string) error {
 		return err
 	}
 	return item.Delete()
+}
+
+func (r *AccountDetails) CheckPassword(password string) error {
+	return bcrypt.CompareHashAndPassword(r.PasswordHash, []byte(password))
+}
+
+// UpdatePassword changes the PasswordHash field to the hashed version of teh provided password
+// NOTE does update in database, account.Update must be call to update in database
+func (r *AccountDetails) UpdatePassword(password string) error {
+	passwordHash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	if err != nil {
+		return err
+	}
+	r.PasswordHash = passwordHash
+	return nil
 }

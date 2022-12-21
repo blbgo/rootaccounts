@@ -7,25 +7,30 @@ import (
 	"strings"
 	"time"
 
+	"golang.org/x/crypto/bcrypt"
+
 	"github.com/blbgo/record/root"
 )
 
 // RootAccount provides access to a database of accounts
 type RootAccount interface {
-	CreateAccount(email string, authLevel uint32) (Account, error)
+	CreateAccount(email string, password string, authLevel uint32) (Account, error)
 	ReadAccount(id uint32) (Account, error)
 	ReadAccountByEmail(email string) (Account, error)
 	RangeAccounts(startID uint32, reverse bool, cb func(account Account) bool) error
 }
 
-// ErrInvalidIDInDatabase bar record value is wrong length
-var ErrInvalidIDInDatabase = errors.New("Invalid account ID in database")
+// ErrInvalidIDInDatabase id in db is wrong length
+var ErrInvalidIDInDatabase = errors.New("invalid account ID in database")
 
 // ErrAlreadyExists3Attempts Attempted to create new account 3 times
-var ErrAlreadyExists3Attempts = errors.New("Attempted to create new account 3 times")
+var ErrAlreadyExists3Attempts = errors.New("attempted to create new account 3 times")
 
 // ErrNilArgument Argument is nil
-var ErrNilArgument = errors.New("Argument is nil")
+var ErrNilArgument = errors.New("argument is nil")
+
+// ErrInvalidIndexCount account records should have one index, email
+var ErrInvalidIndexCount = errors.New("invalid index count")
 
 type rootAccount struct {
 	root.Item
@@ -47,10 +52,14 @@ func New(theRoot root.Root) (RootAccount, error) {
 
 var maxID = []byte{0xff, 0xff, 0xff, 0xff}
 
-func (r rootAccount) CreateAccount(email string, authLevel uint32) (Account, error) {
+func (r rootAccount) CreateAccount(email string, password string, authLevel uint32) (Account, error) {
 	email = strings.ToLower(strings.TrimSpace(email))
+	passwordHash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	if err != nil {
+		return nil, err
+	}
 	for try := 0; try < 3; try++ {
-		newAccount, err := r.tryCreateAccount(email, authLevel)
+		newAccount, err := r.tryCreateAccount(email, passwordHash, authLevel)
 		if err == nil {
 			return newAccount, nil
 		}
@@ -94,7 +103,7 @@ func (r rootAccount) RangeAccounts(
 
 // *** helpers
 
-func (r rootAccount) tryCreateAccount(email string, authLevel uint32) (Account, error) {
+func (r rootAccount) tryCreateAccount(email string, passwordHash []byte, authLevel uint32) (Account, error) {
 	key := make([]byte, 4)
 	err := r.RangeChildren(maxID, 0, true, func(item root.Item) bool {
 		key = item.CopyKey(key)
@@ -110,7 +119,12 @@ func (r rootAccount) tryCreateAccount(email string, authLevel uint32) (Account, 
 	id++
 	binary.BigEndian.PutUint32(key, id)
 	now := time.Now()
-	details := &AccountDetails{AuthLevel: authLevel, Created: now, LastAccess: now}
+	details := &AccountDetails{
+		AuthLevel:    authLevel,
+		PasswordHash: passwordHash,
+		Created:      now,
+		LastAccess:   now,
+	}
 	value, err := json.Marshal(details)
 	if err != nil {
 		return nil, err
